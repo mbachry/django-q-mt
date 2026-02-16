@@ -178,7 +178,12 @@ def threaded_worker(supervisor_queue: multiprocessing.SimpleQueue):
     with concurrent.futures.ThreadPoolExecutor(max_workers=Conf.WORKERS) as executor:
         logger.info(f'[{Conf.CLUSTER_NAME}] Started threaded worker, max threads: {Conf.WORKERS}')
         while True:
-            task_batch = broker.dequeue()
+            try:
+                task_batch = broker.dequeue()
+            except Exception:
+                logging.exception('failed to dequeue from broker')
+                time.sleep(0.5)
+                continue
             if not task_batch:
                 continue
 
@@ -194,7 +199,9 @@ def threaded_worker(supervisor_queue: multiprocessing.SimpleQueue):
                 tid_container: list[int] = []
                 future = executor.submit(worker_wrapper, tid_container, event, task)
                 if not event.wait(5):
-                    raise RuntimeError('worker_wrapper timed out')
+                    logging.error('worker_wrapper timed out')
+                    supervisor_queue.put('exit')
+                    break
                 info = FutureInfo(
                     started_at=time.monotonic(),
                     thread_id=tid_container[0],
