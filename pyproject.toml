@@ -1,0 +1,48 @@
+[project]
+name = "django-q-mt"
+version = "0.1"
+description = ""
+authors = [{name = "Marcin Bachry", email = "hegel666@gmail.com"}]
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+  "django",
+  "django-q2",
+  "python-ptrace",
+]
+
+[tool.ruff]
+line-length = 120
+target-version = 'py312'
+
+[tool.ruff.lint]
+fixable = ['ALL']
+select = [
+    "E",   # pycodestyle errors
+    "W",   # pycodestyle warnings
+    "F",   # pyflakes
+    "I",   # isort
+    "C",   # flake8-comprehensions
+    "B",   # flake8-bugbear
+    "UP",  # pyupgrade
+    "N",   # pep8-naming
+    "RUF", # ruff-specific rules
+    "Q",   # flake8-quotes
+]
+ignore = [
+    "B027",  # Allow non-abstract empty methods in abstract base classes
+    "FBT003",# Allow boolean positional values in function calls
+    "C901",  # Ignore complexity checking
+    "E501",  # Ignore line length errors (handled by formatter)
+    "UP035", # Allow python typing modules
+    "RUF005", # Allow using + operator to concatenate collections
+    "B904", # Allow raise custom exceptions in except blocks
+    "F403", # Allow wildcard imports
+    "E721", # Allow using == to compare with type
+    "UP031", # Allow percent format
+    "RUF022", # Allow unsorted __all__ value
+    "Q000",
+]
+
+[tool.ruff.format]
+quote-style = "preserve"
