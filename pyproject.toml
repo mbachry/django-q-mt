@@ -1,6 +1,6 @@
 [project]
 name = "django-q-mt"
-version = "0.2"
+version = "0.3"
 description = ""
 authors = [{name = "Marcin Bachry", email = "hegel666@gmail.com"}]
 readme = "README.md"

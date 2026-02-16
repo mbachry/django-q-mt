@@ -93,17 +93,19 @@ def raise_in_thread(tid: int, exc_type: type[Exception]):
 
 @dataclasses.dataclass
 class FutureInfo:
-    started_at: float
-    thread_id: int
-    native_thread_id: int
+    future: concurrent.futures.Future
     ack_id: int
     task: dict
+    started_at: float | None = None
+    thread_id: int | None = None
+    native_thread_id: int | None = None
     timeout_attempts: int = 0
 
 
 @dataclasses.dataclass
 class Futures:
     data: dict[concurrent.futures.Future, FutureInfo]
+    booting: dict[threading.Event, FutureInfo]
     lock: threading.Lock
 
 
@@ -117,7 +119,7 @@ def threaded_worker(supervisor_queue: multiprocessing.SimpleQueue):
 
     timeout = Conf.TIMEOUT
 
-    futures = Futures(data={}, lock=threading.Lock())
+    futures = Futures(data={}, booting={}, lock=threading.Lock())
 
     def worker_done_cb(future: concurrent.futures.Future):
         with futures.lock:
@@ -167,12 +169,17 @@ def threaded_worker(supervisor_queue: multiprocessing.SimpleQueue):
         cancel_thread.daemon = True
         cancel_thread.start()
 
-    def worker_wrapper(tid_container, event, task):
+    def worker_wrapper(event, task):
+        event.wait()
         tid = threading.get_ident()
         native = threading.get_native_id()
-        tid_container.append(tid)
-        tid_container.append(native)
-        event.set()
+        with futures.lock:
+            info = futures.booting.pop(event)
+            info.started_at = time.monotonic()
+            info.thread_id = tid
+            info.native_thread_id = native
+            futures.data[info.future] = info
+            info.future.add_done_callback(worker_done_cb)
         return process_task(task)
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=Conf.WORKERS) as executor:
@@ -196,22 +203,11 @@ def threaded_worker(supervisor_queue: multiprocessing.SimpleQueue):
                     continue
 
                 event = threading.Event()
-                tid_container: list[int] = []
-                future = executor.submit(worker_wrapper, tid_container, event, task)
-                if not event.wait(5):
-                    logging.error('worker_wrapper timed out')
-                    supervisor_queue.put('exit')
-                    break
-                info = FutureInfo(
-                    started_at=time.monotonic(),
-                    thread_id=tid_container[0],
-                    native_thread_id=tid_container[1],
-                    ack_id=ack_id,
-                    task=task,
-                )
+                future = executor.submit(worker_wrapper, event, task)
+                info = FutureInfo(future=future, ack_id=ack_id, task=task)
                 with futures.lock:
-                    futures.data[future] = info
-                future.add_done_callback(worker_done_cb)
+                    futures.booting[event] = info
+                event.set()
 
     # sched_event.set()
     # cancel_event.set()
