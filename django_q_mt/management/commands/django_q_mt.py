@@ -202,6 +202,8 @@ def threaded_worker(supervisor_queue: multiprocessing.SimpleQueue):
                     broker.fail(ack_id)
                     continue
 
+                task['ack_id'] = ack_id
+
                 event = threading.Event()
                 future = executor.submit(worker_wrapper, event, task)
                 info = FutureInfo(future=future, ack_id=ack_id, task=task)
