@@ -13,14 +13,16 @@ from collections.abc import Callable
 from typing import cast
 
 from django.core.management.base import BaseCommand
+from django.dispatch import Signal
 from django.utils import timezone
 from django_q.brokers import get_broker
 from django_q.conf import Conf
 from django_q.monitor import save_cached, save_task
 from django_q.scheduler import scheduler
+from django_q.signals import pre_execute
 from django_q.signing import SignedPackage
 from django_q.utils import get_func_repr
-from ptrace.debugger import PtraceDebugger
+from ptrace.debugger import ProcessSignal, PtraceDebugger
 from ptrace.syscall import SYSCALL_NAMES
 
 NR_sched_yield = next(k for k, v in SYSCALL_NAMES.items() if v == 'sched_yield')
@@ -29,6 +31,9 @@ ctypes.pythonapi.PyThreadState_SetAsyncExc.argtypes = [ctypes.c_long, ctypes.py_
 ctypes.pythonapi.PyThreadState_SetAsyncExc.restype = ctypes.c_int
 
 logger = logging.getLogger('django-q')
+
+# compatibility signal for django-q2<=1.9.0
+post_execute_in_worker = Signal()
 
 
 def process_task(task: dict) -> tuple[str, bool]:
@@ -47,11 +52,18 @@ def process_task(task: dict) -> tuple[str, bool]:
             # raise a meaningfull error if task["func"] is not a valid function
             return f"Function {task['func']} is not defined", False
         f = func
+
+    pre_execute.send(sender="django_q", func=f, task=task)
+
     try:
         res = f(*task["args"], **task["kwargs"])
-        return res, True
+        result = (res, True)
     except Exception as e:
-        return f"{e} : {traceback.format_exc()}", False
+        result = (f"{e} : {traceback.format_exc()}", False)
+
+    post_execute_in_worker.send(sender="django_q", func=f, task=task)
+
+    return result
 
 
 def finalize_task(broker, ack_id, task):
@@ -218,23 +230,26 @@ def threaded_worker(supervisor_queue: multiprocessing.SimpleQueue):
 def unblock_thread(pid, tid):
     logger.info(f'unblocking timed out thread {tid=}')
     debugger = PtraceDebugger()
-    debugger.addProcess(pid, False)
-    thread = debugger.addProcess(tid, False, is_thread=True)
+    try:
+        debugger.addProcess(pid, False)
+        thread = debugger.addProcess(tid, False, is_thread=True)
 
-    thread.singleStep()
-    thread.kill(signal.SIGINT)
+        thread.singleStep()
+        thread.kill(signal.SIGINT)
 
-    thread.waitSignals(signal.SIGTRAP, signal.SIGSTOP, signal.SIGINT)
+        thread.waitSignals(signal.SIGTRAP, signal.SIGSTOP, signal.SIGINT)
 
-    thread.syscall()
-    debugger.waitSyscall()
+        thread.syscall()
+        debugger.waitSyscall()
 
-    # replace the blocked syscall with a benign sched_yield. orig_rax
-    # shouldn't do any damage if the thread isn't blocked on a syscall
-    thread.setreg('orig_rax', NR_sched_yield)
-
-    debugger.quit()
-    logger.info(f'thread {tid=} unblocked')
+        # replace the blocked syscall with a benign sched_yield. orig_rax
+        # shouldn't do any damage if the thread isn't blocked on a syscall
+        thread.setreg('orig_rax', NR_sched_yield)
+        logger.info(f'thread {tid=} unblocked')
+    except ProcessSignal as e:
+        logger.info(f'ProcessSignal during syscall wait: {e}')
+    finally:
+        debugger.quit()
 
 
 def supervisor_process():
