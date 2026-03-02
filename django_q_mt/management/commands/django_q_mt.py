@@ -19,7 +19,7 @@ from django_q.brokers import get_broker
 from django_q.conf import Conf
 from django_q.monitor import save_cached, save_task
 from django_q.scheduler import scheduler
-from django_q.signals import pre_execute
+from django_q.signals import post_execute, pre_execute
 from django_q.signing import SignedPackage
 from django_q.utils import get_func_repr
 from ptrace.debugger import ProcessSignal, PtraceDebugger
@@ -75,6 +75,8 @@ def finalize_task(broker, ack_id, task):
     # acknowledge result
     if task["success"] or task.get("ack_failure", False):
         broker.acknowledge(ack_id)
+
+    post_execute.send(sender="django_q", task=task)
 
     info_name = get_func_repr(task["func"])
     if task["success"]:
