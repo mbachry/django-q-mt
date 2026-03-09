@@ -12,6 +12,7 @@ import traceback
 from collections.abc import Callable
 from typing import cast
 
+from django import db
 from django.core.management.base import BaseCommand
 from django.dispatch import Signal
 from django.utils import timezone
@@ -139,6 +140,7 @@ def threaded_worker(supervisor_queue: multiprocessing.SimpleQueue):
         with futures.lock:
             info = futures.data[future]
         try:
+            db.close_old_connections()
             result, success = future.result()
             info.task["result"] = result
             info.task["success"] = success
