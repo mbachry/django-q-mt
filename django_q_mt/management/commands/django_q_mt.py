@@ -216,6 +216,7 @@ def threaded_worker(supervisor_queue: multiprocessing.SimpleQueue):
                     broker.fail(ack_id)
                     continue
 
+                task['cluster'] = Conf.CLUSTER_NAME
                 task['ack_id'] = ack_id
 
                 event = threading.Event()
