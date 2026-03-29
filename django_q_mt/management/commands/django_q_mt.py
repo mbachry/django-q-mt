@@ -132,6 +132,8 @@ def threaded_worker(supervisor_queue: multiprocessing.SimpleQueue):
     sched_thread.daemon = True
     sched_thread.start()
 
+    pool_sem = threading.BoundedSemaphore(Conf.WORKERS)
+
     timeout = Conf.TIMEOUT
 
     futures = Futures(data={}, booting={}, lock=threading.Lock())
@@ -154,6 +156,7 @@ def threaded_worker(supervisor_queue: multiprocessing.SimpleQueue):
         except Exception:
             logger.exception('worker_done_cb failed')
         finally:
+            pool_sem.release()
             with futures.lock:
                 del futures.data[future]
 
@@ -220,6 +223,9 @@ def threaded_worker(supervisor_queue: multiprocessing.SimpleQueue):
 
                 task['cluster'] = Conf.CLUSTER_NAME
                 task['ack_id'] = ack_id
+
+                # block main thread if all workers busy
+                pool_sem.acquire()
 
                 event = threading.Event()
                 future = executor.submit(worker_wrapper, event, task)
