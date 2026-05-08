@@ -14,13 +14,12 @@ from typing import cast
 
 from django import db
 from django.core.management.base import BaseCommand
-from django.dispatch import Signal
 from django.utils import timezone
 from django_q.brokers import get_broker
 from django_q.conf import Conf
 from django_q.monitor import save_cached, save_task
 from django_q.scheduler import scheduler
-from django_q.signals import post_execute, pre_execute
+from django_q.signals import post_execute, post_execute_in_worker, pre_execute
 from django_q.signing import SignedPackage
 from django_q.utils import get_func_repr
 from ptrace.debugger import ProcessSignal, PtraceDebugger
@@ -33,11 +32,8 @@ ctypes.pythonapi.PyThreadState_SetAsyncExc.restype = ctypes.c_int
 
 logger = logging.getLogger('django-q')
 
-# compatibility signal for django-q2<=1.9.0
-post_execute_in_worker = Signal()
 
-
-def process_task(task: dict) -> tuple[str, bool]:
+def _process_task(task: dict) -> tuple[str, bool, Callable]:
     info_name = get_func_repr(task["func"])
     task_desc = f"Processing '{info_name}' {task['name']}"
     if "group" in task:
@@ -51,20 +47,28 @@ def process_task(task: dict) -> tuple[str, bool]:
         func = cast('Callable | None', pydoc.locate(f))
         if func is None:
             # raise a meaningfull error if task["func"] is not a valid function
-            return f"Function {task['func']} is not defined", False
+            return f"Function {task['func']} is not defined", False, lambda: None
         f = func
 
     pre_execute.send(sender="django_q", func=f, task=task)
 
     try:
         res = f(*task["args"], **task["kwargs"])
-        result = (res, True)
+        result = res
+        success = True
     except Exception as e:
-        result = (f"{e} : {traceback.format_exc()}", False)
+        result = f"{e} : {traceback.format_exc()}"
+        success = False
 
-    post_execute_in_worker.send(sender="django_q", func=f, task=task)
+    return result, success, f
 
-    return result
+
+def process_task(task: dict) -> None:
+    result, success, func = _process_task(task)
+    task['result'] = result
+    task['success'] = success
+    task['stopped'] = timezone.now()
+    post_execute_in_worker.send(sender="django_q", func=func, task=task)
 
 
 def finalize_task(broker, ack_id, task):
@@ -143,10 +147,7 @@ def threaded_worker(supervisor_queue: multiprocessing.SimpleQueue):
             info = futures.data[future]
         try:
             db.close_old_connections()
-            result, success = future.result()
-            info.task["result"] = result
-            info.task["success"] = success
-            info.task["stopped"] = timezone.now()
+            future.result()
             finalize_task(broker, info.ack_id, info.task)
         except TimeoutError:
             info.task["result"] = 'Task timed out'
@@ -199,7 +200,7 @@ def threaded_worker(supervisor_queue: multiprocessing.SimpleQueue):
             info.native_thread_id = native
             futures.data[info.future] = info
             info.future.add_done_callback(worker_done_cb)
-        return process_task(task)
+        process_task(task)
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=Conf.WORKERS) as executor:
         logger.info(f'[{Conf.CLUSTER_NAME}] Started threaded worker, max threads: {Conf.WORKERS}')
