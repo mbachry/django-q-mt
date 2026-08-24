@@ -200,7 +200,11 @@ def threaded_worker(supervisor_queue: multiprocessing.SimpleQueue):
             info.native_thread_id = native
             futures.data[info.future] = info
             info.future.add_done_callback(worker_done_cb)
-        process_task(task)
+        try:
+            db.close_old_connections()
+            process_task(task)
+        finally:
+            db.close_old_connections()
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=Conf.WORKERS) as executor:
         logger.info(f'[{Conf.CLUSTER_NAME}] Started threaded worker, max threads: {Conf.WORKERS}')
